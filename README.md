@@ -2,10 +2,6 @@
   <img src="banner.png" alt="Grok Bot и Telegram" width="100%">
 </p>
 
-<p align="center">
-  #Telegram #Grok #GrokBot #xAI #Serverless #Webhook #AI
-</p>
-
 # telegram-grok-wake
 
 Продолжить общение с Grok Bot можно и в Telegram.
