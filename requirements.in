@@ -1,0 +1,6 @@
+# Direct dependencies. Locked with hashes in requirements.txt via:
+#   pip-compile --generate-hashes --strip-extras -o requirements.txt requirements.in
+aiogram==3.33.0     # Telegram Bot API 10.x client (async, aiohttp, timeouts, files, topics)
+tenacity==9.2.1     # retries with exponential backoff
+supervisor==4.3.0   # process supervisor (autorestart) + event listener API for the hang watchdog
+pillow==13.0.0      # optional: convert PNG -> JPEG for tg-send set-photo

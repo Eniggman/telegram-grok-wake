@@ -1,4 +1,3 @@
-node_modules/
-.dev.vars
-.wrangler/
-*.toml.bak
+# Local install-specific files — do not package or commit
+xai-team-id
+.env

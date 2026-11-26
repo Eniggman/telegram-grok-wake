@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Install pinned dependencies: Python (.venv, requirements.txt with hashes) and the
+# Telegram Serverless CLI (serverless/node_modules from package-lock.json).
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+python3 -m venv "$DIR/.venv"
+"$DIR/.venv/bin/python" -m pip install --quiet --disable-pip-version-check --require-hashes -r "$DIR/requirements.txt"
+echo "tg-bridge: Python dependencies installed into $DIR/.venv"
+if command -v npm >/dev/null 2>&1; then
+  (cd "$DIR/serverless" && npm ci --silent --no-audit --no-fund)
+  echo "tg-bridge: tgcloud CLI installed into $DIR/serverless/node_modules"
+else
+  echo "tg-bridge: npm not found; install Node.js 18+ and run: (cd $DIR/serverless && npm ci)" >&2
+fi

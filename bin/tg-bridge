@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Run the relay in the foreground (supervisord runs it this way; for debugging).
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PY="$DIR/.venv/bin/python"
+[ -x "$PY" ] || { echo "tg-bridge: dependencies are not installed; run $DIR/bin/tg-install" >&2; exit 2; }
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m tgbridge.relay "$@"

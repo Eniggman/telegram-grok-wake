@@ -7,15 +7,15 @@
 // has no initData). Results come back hex-encoded ("TGB:<hex>") so the box can
 // parse them exactly from the CLI output. Secrets are never returned: only
 // presence, length and a short SHA-256 fingerprint.
-import { db, api, EndpointError } from 'sdk';
+import { api, db, EndpointError } from 'sdk';
 import { sql } from 'sdk/db';
-import { VERSION, toHex, splitTelegramText } from '../lib/core.js';
+import { VERSION, OWNER_MENU, GUEST_MENU, toHex } from '../lib/core.js';
+import { renderUsageCard, publishUsageCard, usageCardStoreKey } from '../lib/usage_card.js';
 import * as store from '../lib/store.js';
-import { verifyReplyToken, tokenFingerprint } from '../lib/reply_token.js';
 
-const CONFIG_KEYS = new Set(['routine_url', 'routine_key', 'owner_id', 'allowed_ids',
-  'history_messages', 'history_max_chars', 'history_days', 'max_wakes_per_min', 'max_wakes_per_hour', 'reaction']);
-const SECRET_KEYS = new Set(['routine_key', 'reply_signing_key']);
+const CONFIG_KEYS = new Set(['routine_url', 'routine_key', 'owner_id', 'allowed_ids', 'bin_dir',
+  'history_messages', 'history_max_chars', 'history_days', 'max_wakes_per_min', 'reaction', 'placeholder', 'sticker_pack']);
+const SECRET_KEYS = new Set(['routine_key']);
 
 async function fingerprint(value) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -41,22 +41,45 @@ async function configStatus() {
   return { version: VERSION, ready: cfg.ready, config: out };
 }
 
+async function commands_get_impl(ownerId) {
+  const scopes = { default: { type: 'default' }, all_private_chats: { type: 'all_private_chats' },
+    owner_chat: { type: 'chat', chat_id: ownerId } };
+  const out = {};
+  for (const [name, scope] of Object.entries(scopes)) out[name] = await api.getMyCommands({ scope });
+  out.menu_button = await api.getChatMenuButton({});
+  return { commands: out };
+}
+
 const OPS = {
   async ping() { return { version: VERSION, now: store.now() }; },
 
   async config_set({ values }) {
     if (!values || typeof values !== 'object') throw new EndpointError('values required');
     for (const k of Object.keys(values)) if (!CONFIG_KEYS.has(k)) throw new EndpointError(`unknown key ${k}`);
-    const url = 'routine_url' in values ? String(values.routine_url ?? '') : '';
-    if (url !== '' && !/^https:\/\/[^\s/]+/i.test(url))
-      throw new EndpointError('routine_url must start with https:// (otherwise the routine key would travel unencrypted)');
     await store.setConfig(values);
     return configStatus();
   },
 
   async config_status() { return configStatus(); },
 
-  // Store memory rows (replies, migration). Idempotent by
+  // Bot menu, idempotent (setMyCommands replaces the list for a scope). Owner chat
+  // gets the full menu; default + all private chats get only /new. Menu button = commands.
+  async commands_set() {
+    const cfg = await store.loadConfig();
+    if (cfg.owner_id == null) throw new EndpointError('owner_id is not configured');
+    await api.setMyCommands({ commands: GUEST_MENU, scope: { type: 'default' } });
+    await api.setMyCommands({ commands: GUEST_MENU, scope: { type: 'all_private_chats' } });
+    await api.setMyCommands({ commands: OWNER_MENU, scope: { type: 'chat', chat_id: cfg.owner_id } });
+    await api.setChatMenuButton({ menu_button: { type: 'commands' } });
+    return commands_get_impl(cfg.owner_id);
+  },
+
+  async commands_get() {
+    const cfg = await store.loadConfig();
+    return commands_get_impl(cfg.owner_id);
+  },
+
+  // Store memory rows (tg-send replies, migration). Idempotent by
   // (chat, role, tg_message_id).
   async record({ items = [], topics = [] }) {
     let added = 0;
@@ -75,7 +98,7 @@ const OPS = {
     return { added, skipped: items.length - added, topics: topics.length };
   },
 
-  async history({ chat_id, thread_id = 0, limit = 50 }) {
+  async history({ chat_id, thread_id = 0, limit = 30 }) {
     const n = Math.min(Math.max(int(limit, 'limit'), 1), 500);
     const items = await store.recentHistory(int(chat_id, 'chat_id'), thread_id ? int(thread_id, 'thread_id') : 0, n,
       { itemMaxChars: null });
@@ -118,58 +141,16 @@ const OPS = {
     return { stopped: await store.isStopped(int(chat_id, 'chat_id'), int(draft_id, 'draft_id')) };
   },
 
-  // Reply path used by the Grok routine. Auth: CLI token (tgcloud run) plus a
-  // short-lived HMAC token bound to one chat/topic. First send edits the
-  // «думаю…» placeholder; if edit fails, sendMessage and try to delete it.
-  // A final send retires the token, but only once the send has actually gone out.
-  // BOT_TOKEN is never accepted here — the SDK talks to Telegram.
-  async send({ token, text, final }) {
-    if (typeof text !== 'string' || !text) throw new EndpointError('text required');
-    const key = await store.getOrCreateReplySigningKey();
-    const claims = await verifyReplyToken(key, token);
-    if (!claims) throw new EndpointError('unauthorized');
-    const cfg = await store.loadConfig();
-    const chatId = Number(claims.chatId);
-    if (!Number.isFinite(chatId) || !cfg.allowed.has(chatId)) throw new EndpointError('unauthorized');
-    const parts = splitTelegramText(text);
-    if (!parts.length) throw new EndpointError('text required');
-    // Everything that can be refused is checked above; only now is the token claimed.
-    const fp = await tokenFingerprint(token);
-    const claim = await store.beginReplySend(fp, Boolean(final));
-    if (!claim) throw new EndpointError('unauthorized');
-    const messageIds = [];
-    try {
-      const phId = await store.takeReplyPlaceholder(fp);
-      let firstSent = false;
-      if (phId) {
-        try {
-          await api.editMessageText({ chat_id: chatId, message_id: phId, text: parts[0] });
-          messageIds.push(phId);
-          firstSent = true;
-        } catch (e) {
-          try { await api.deleteMessage({ chat_id: chatId, message_id: phId }); } catch { /* ignore */ }
-        }
-      }
-      for (const part of firstSent ? parts.slice(1) : parts) {
-        const params = { chat_id: chatId, text: part };
-        if (claims.threadId != null) params.message_thread_id = claims.threadId;
-        const result = await api.sendMessage(params);
-        if (result && result.message_id != null) messageIds.push(result.message_id);
-      }
-    } catch (e) {
-      // Sending failed: hand a final token back so the routine can retry instead of
-      // losing the answer. If some parts already went out, a retry may repeat them;
-      // that is better than a silent, truncated answer.
-      try { await store.reopenReply(fp, claim.claimed); } catch { /* ignore */ }
-      throw e;
-    }
-    const lastId = messageIds.length ? messageIds[messageIds.length - 1] : null;
-    try {
-      await store.addMessage({ chatId, threadId: claims.threadId, role: 'assistant', text, tgMessageId: lastId });
-    } catch (e) {
-      console.warn('history not saved', String(e && (e.message || e))); // the answer itself was delivered
-    }
-    return { parts: parts.length, message_ids: messageIds };
+  // v4.3: tg-send takes the bridge's "🗨️ Думаю..." placeholder (single use) to
+  // turn it into the answer; gives it back if it could not send anything.
+  async placeholder_claim({ chat_id, reply_to = null, thread_id = 0 }) {
+    const ph = await store.takePlaceholder(int(chat_id, 'chat_id'), reply_to ? int(reply_to, 'reply_to') : null,
+      'claimed', { threadId: thread_id ? int(thread_id, 'thread_id') : 0 });
+    return { placeholder: ph, now: store.now() };
+  },
+
+  async placeholder_release({ chat_id, message_id }) {
+    return { released: await store.releasePlaceholder(int(chat_id, 'chat_id'), int(message_id, 'message_id')) };
   },
 
   async prune() {
@@ -177,11 +158,47 @@ const OPS = {
     return { removed: await store.housekeep(await store.loadConfig()) };
   },
 
+
+  // /usage card: edit the "Думаю..." placeholder (or a card being refreshed)
+  // into an HTML usage message with an «Обновить» inline button.
+  async usage_card({ chat_id, reply_to = null, message_id = null, thread_id = 0, data }) {
+    if (!data || typeof data !== 'object') throw new EndpointError('data required');
+    let card;
+    try { card = renderUsageCard(data); }
+    catch (e) { throw new EndpointError(String(e && e.message || e)); }
+    const chatId = int(chat_id, 'chat_id');
+    const replyTo = reply_to != null && reply_to !== '' ? int(reply_to, 'reply_to') : null;
+    const midIn = message_id != null && message_id !== '' ? int(message_id, 'message_id') : null;
+    const threadId = thread_id ? int(thread_id, 'thread_id') : 0;
+    let ph = null;
+    if (replyTo) ph = await store.takePlaceholder(chatId, replyTo, 'claimed', { threadId });
+    const targetId = (ph && ph.message_id) || midIn;
+    if (ph && ph.sticker_message_id) {
+      try { await api.deleteMessage({ chat_id: chatId, message_id: ph.sticker_message_id }); }
+      catch (_) { /* sticker already gone is fine */ }
+    }
+    try {
+      return await publishUsageCard({
+        api, card, chatId, targetId, threadId,
+        onEditFail: async () => { if (ph) await store.releasePlaceholder(chatId, targetId); },
+        save: async (c, mid, savedCard) => {
+          await store.setConfig({
+            [usageCardStoreKey(c, mid)]: JSON.stringify({
+              text: savedCard.text, parse_mode: savedCard.parse_mode, reply_markup: savedCard.reply_markup,
+            }),
+          });
+        },
+      });
+    } catch (e) {
+      throw new EndpointError(String(e && e.message || e));
+    }
+  },
+
   // Test helper: remove everything stored for a (fake) test chat id.
   async purge_chat({ chat_id }) {
     const c = int(chat_id, 'chat_id');
     if (c > 0 && c < 1000) {
-      for (const t of ['messages', 'deliveries', 'topics', 'album_parts', 'stops']) {
+      for (const t of ['messages', 'deliveries', 'topics', 'album_parts', 'stops', 'placeholders']) {
         await db.run(sql`DELETE FROM ${sql.raw(t)} WHERE chat_id = ${c}`);
       }
       return { purged: c };

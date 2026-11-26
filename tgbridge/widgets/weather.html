@@ -1,0 +1,76 @@
+<style>
+:root{--tx:#0a3560;--t2:#33658f;--gl:rgba(255,255,255,.62);--g2:rgba(255,255,255,.26);--bd:rgba(255,255,255,.85);--sh:rgba(0,70,140,.28);--sky:linear-gradient(170deg,#1f8fe6 0,#4fb9f5 38%,#a6e3ff 72%,#e4f8ff 100%)}
+@media(prefers-color-scheme:dark){:root{--tx:#eef8ff;--t2:#a8d2f2;--gl:rgba(120,190,255,.3);--g2:rgba(60,130,210,.16);--bd:rgba(170,220,255,.45);--sh:rgba(0,10,40,.5);--sky:linear-gradient(170deg,#06214a 0,#0d4a8c 50%,#1c78bf 100%)}}
+body{margin:0;padding:8px 8px 4px;background:var(--sky);color:var(--tx);font:13px/1.25 ui-rounded,system-ui,sans-serif;position:relative;overflow:hidden}
+.b{position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:radial-gradient(circle at 32% 28%,#fff 0,rgba(255,255,255,.4) 14%,rgba(255,255,255,.06) 50%,rgba(255,255,255,.35) 100%)}
+.p{position:relative;border-radius:16px;border:1px solid var(--bd);background:linear-gradient(var(--gl),var(--g2) 50%,rgba(255,255,255,.1) 51%,var(--g2));box-shadow:0 3px 12px var(--sh),inset 0 1px 0 rgba(255,255,255,.9);margin-bottom:7px;overflow:hidden}
+.n{display:flex;align-items:center;gap:8px;padding:8px 12px}
+.n svg{width:64px;height:64px}
+.big{font-size:40px;font-weight:300;letter-spacing:-1px}
+.c{margin-left:auto;text-align:right}
+.c b{font-size:16px}
+.s{color:var(--t2);font-size:11px}
+.w{touch-action:pan-y}
+.h{display:flex;padding:6px 2px;transition:transform .25s}
+.h>div{flex:0 0 50px;text-align:center;font-size:11px;color:var(--t2);line-height:1.35;font-variant-numeric:tabular-nums}
+.h>div:first-child{background:rgba(255,255,255,.3);border-radius:12px}
+.h svg{width:30px;height:30px;display:block;margin:1px auto}
+.h i{display:block;height:13px;font-size:9px;font-style:normal;opacity:.8}
+.h b,.r b{color:var(--tx);font-size:13px}
+.q,.r b.q{color:#1576c9;font-weight:600}
+.r{display:grid;grid-template-columns:60px 68px 32px 50px 1fr;align-items:center;gap:6px;padding:5px 10px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.r+.r{border-top:1px solid rgba(255,255,255,.45)}
+.r svg{width:32px;height:32px}
+.t{color:var(--t2)}
+.r .t b{font-size:15px;font-weight:700}
+.r>div:last-child{text-align:right;color:var(--t2);font-size:12px}
+.f{font-size:10px;color:var(--t2);display:flex;justify-content:space-between;padding:0 4px}
+a{color:var(--tx);font-weight:600}
+</style>
+<svg width="0" height="0" style="position:absolute"><defs>
+<radialGradient id="gs" cx=".38" cy=".35"><stop offset="0" stop-color="#fffbd0"/><stop offset=".5" stop-color="#ffd02a"/><stop offset="1" stop-color="#ff8c12"/></radialGradient>
+<radialGradient id="gh"><stop offset=".55" stop-color="#ffe680" stop-opacity=".7"/><stop offset="1" stop-color="#ffe680" stop-opacity="0"/></radialGradient>
+<linearGradient id="gc" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#cfe6fb"/></linearGradient>
+<linearGradient id="gd" x2="0" y2="1"><stop offset="0" stop-color="#d3dde8"/><stop offset="1" stop-color="#7e93ab"/></linearGradient>
+<linearGradient id="gr" x2="0" y2="1"><stop offset="0" stop-color="#9fe2ff"/><stop offset="1" stop-color="#1477d4"/></linearGradient>
+<linearGradient id="gm" x2="0" y2="1"><stop offset="0" stop-color="#fffbe0"/><stop offset="1" stop-color="#e9c75a"/></linearGradient>
+<linearGradient id="gb" x2="0" y2="1"><stop offset="0" stop-color="#fff59a"/><stop offset="1" stop-color="#ffaa00"/></linearGradient>
+<linearGradient id="hl" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<g id="S"><circle cx="32" cy="32" r="26" fill="url(#gh)"/><circle cx="32" cy="32" r="15" fill="url(#gs)" stroke="#f08a00" stroke-width="1"/><ellipse cx="28" cy="25" rx="9" ry="5" fill="url(#hl)"/></g>
+<g id="M"><path d="M37 10a22 22 0 1 0 17 34A17 17 0 1 1 37 10z" fill="url(#gm)" stroke="#c9a23a"/><ellipse cx="22" cy="24" rx="5" ry="8" fill="url(#hl)"/></g>
+<path id="cp" d="M17 50a10 10 0 0 1-1-20a14 14 0 0 1 27-6a12 12 0 0 1 4 26z"/>
+<g id="L"><use href="#cp" fill="url(#gc)" stroke="#8fbde6" stroke-width="1.5"/><ellipse cx="29" cy="30" rx="12" ry="5" fill="url(#hl)"/></g>
+<g id="D"><use href="#cp" fill="url(#gd)" stroke="#6a7f98" stroke-width="1.5"/><ellipse cx="29" cy="30" rx="12" ry="4" fill="url(#hl)"/></g>
+<path id="d" d="M0 0c3 4 4 6 4 8a4 4 0 0 1-8 0c0-2 1-4 4-8z" fill="url(#gr)" stroke="#0f64b3" stroke-width=".8"/>
+<circle id="o" r="3.6" fill="#dff1ff" stroke="#2f86d6" stroke-width="1.4"/>
+<g id="r"><use href="#d" x="22" y="50"/><use href="#d" x="33" y="53"/><use href="#d" x="44" y="50"/></g>
+<g id="e"><use href="#d" x="26" y="51"/><use href="#d" x="40" y="51"/></g>
+<g id="s"><use href="#o" x="22" y="56"/><use href="#o" x="33" y="59"/><use href="#o" x="44" y="56"/></g>
+<g id="x"><use href="#d" x="25" y="51"/><use href="#o" x="41" y="57"/></g>
+<path id="t" d="M35 40l-9 14h6l-4 10 13-16h-6l4-8z" fill="url(#gb)" stroke="#d07800"/>
+<g id="f" stroke="#eef7ff" stroke-width="3.5" stroke-linecap="round"><path d="M14 50h36M20 57h30M12 63h28"/></g>
+</defs></svg>
+<div id="a"></div>
+<script>
+const W=window.TelegramWidget,A=document.getElementById('a'),
+P=['S00','S-4-4|L22 22.6','S-8-8.9|L8 12.85','S16-6.6|L2 10.95','D14 0.7|L0 12.95','L2 0.9|f','L2-2.95|e','D2-2.95|r','S-10-10.8|L6 6.85|e','D2-2.95|t','L2-2.95|s','D2-2.95|s','S-10-10.8|L6 6.85|s','L2-2.95|x','S0-6.9|f'],
+T=['Ясно','Малооблачно','Переменная облачность','Облачно','Пасмурно','Туман','Небольшой дождь','Дождь','Ливни','Гроза','Небольшой снег','Снег','Снежные заряды','Мокрый снег','Дымка'],
+WD=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+function ic(c){let n=c>19;c%=20;return'<svg viewBox="0 0 64 64">'+P[c].split('|').map(p=>{let m=p.match(/^(\w)(-?\d+)\s?(-?\d+)(\.\d+)?$/)||[0,p[0],0,0];let s=p[0]=='S'&&n?'M':m[1];return'<use href="#'+s+'" transform="translate('+m[2]+' '+m[3]+') scale('+(m[4]||1)+')"/>'}).join('')+'</svg>'}
+function tf(t){return(t>0?'+':t<0?'−':'')+Math.abs(t)+'°'}
+function mm(p){return(p/10).toFixed(1).replace('.0','')}
+function draw(){let D=null;try{D=JSON.parse(W.publicData)}catch(e){}
+if(!D){A.innerHTML='<div class="p n">Нет данных прогноза</div>';return}
+let H=D.h,N=H[0],d0=new Date(D.d0+'T12:00Z');
+let s='<div class="p n">'+ic(N[0])+'<div class="big">'+tf(N[1])+'</div><div class="c"><b>'+D.c+'</b><div>'+T[N[0]%20]+'</div><div class="s">сегодня '+tf(D.d[0][1])+' … '+tf(D.d[0][2])+'</div></div></div><div class="p w"><div class="h" id="h">';
+H.forEach((r,i)=>{s+='<div>'+(i?String((D.h0+i)%24).padStart(2,'0')+':00':'Сейчас')+'<b style="display:block">'+tf(r[1])+'</b><div>💧'+r[4]+'%</div>'+ic(r[0])+'<div class="q">☔'+(r[5]||0)+'%</div><i>'+(r[2]?mm(r[2])+' мм':'')+'</i><div>'+r[3]+' м/с</div></div>'});
+s+='</div></div><div class="p">';
+D.d.forEach((r,i)=>{let d=new Date(d0.getTime()+i*864e5);s+='<div class="r"><div><b>'+(i?WD[d.getUTCDay()]:'Сегодня')+'</b><div class="s">'+d.getUTCDate()+'.'+String(d.getUTCMonth()+1).padStart(2,'0')+'</div></div>'+'<div><div class="t"><b>'+tf(r[1])+'</b> / <b>'+tf(r[2])+'</b></div><div class="s">💧 '+r[7]+'%</div></div>'+ic(r[0])+'<div><b class="q">☔'+r[4]+'%</b><div class="s">'+mm(r[3])+' мм</div></div><div>💨 '+r[5]+'–'+r[6]+' м/с</div></div>'});
+A.innerHTML=s+'</div><div class="f"><span>Данные: <a href="https://www.meteoblue.com/ru/weather/week/'+D.l+'">meteoblue</a></span><span>обновлено '+D.u+'</span></div>';
+let h=document.getElementById('h'),x=0,sx,ox,mn,on=0;
+h.onpointerdown=e=>{on=1;sx=e.clientX;ox=x;mn=Math.min(0,h.parentNode.getBoundingClientRect().width-H.length*50-4);h.style.transition='none';h.setPointerCapture(e.pointerId)};
+h.onpointermove=e=>{if(on){x=Math.max(mn,Math.min(0,ox+e.clientX-sx));h.style.transform='translateX('+x+'px)'}};
+h.onpointerup=h.onpointercancel=()=>{on=0;h.style.transition=''}}
+[[8,12,30],[86,6,18],[70,40,40],[4,62,22],[90,75,26],[40,88,14]].forEach(b=>{let e=document.createElement('div');e.className='b';e.style.cssText='left:'+b[0]+'%;top:'+b[1]+'%;width:'+b[2]+'px;height:'+b[2]+'px';document.body.insertBefore(e,document.body.firstChild)});
+draw();W.onEvent('publicDataChanged',draw);W.ready&&W.ready();
+</script>

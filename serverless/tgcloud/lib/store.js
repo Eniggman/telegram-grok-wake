@@ -1,13 +1,18 @@
 // tg-bridge 4 — database access (history, outbox / dead letters, settings).
 import { db } from 'sdk';
 import { sql } from 'sdk/db';
-import { parseConfig, formatRecent, ITEM_MAX_CHARS } from './core.js';
+import { parseConfig, formatRecent, ITEM_MAX_CHARS, PLACEHOLDER_UNSCOPED_MAX_AGE } from './core.js';
 
 export const now = () => Math.floor(Date.now() / 1000);
 
 export async function loadConfig() {
   const rows = await db.all(sql`SELECT k, v FROM kv`);
   return parseConfig(rows);
+}
+
+export async function getKv(k) {
+  const r = await db.get(sql`SELECT v FROM kv WHERE k = ${k}`);
+  return r ? r.v : null;
 }
 
 export async function setConfig(values) {
@@ -19,68 +24,6 @@ export async function setConfig(values) {
                        ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
     }
   }
-}
-
-/** Signing key for reply tokens (auto-created, never returned in full). */
-export async function getOrCreateReplySigningKey() {
-  const row = await db.get(sql`SELECT v FROM kv WHERE k = 'reply_signing_key'`);
-  if (row && row.v) return row.v;
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const key = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-  await db.run(sql`INSERT INTO kv (k, v) VALUES ('reply_signing_key', ${key})
-                   ON CONFLICT(k) DO NOTHING`);
-  const again = await db.get(sql`SELECT v FROM kv WHERE k = 'reply_signing_key'`);
-  return again.v;
-}
-
-/**
- * Atomically start a send with a reply token. Returns null when the token is
- * already finalized (a final send was accepted earlier); otherwise {claimed}.
- * `claimed` is the exact value a FINAL send wrote (null for a non-final send):
- * pass it to reopenReply() if the send then fails, so the routine can retry.
- * Of two concurrent final sends only one gets a claim (first final wins).
- * State lives in kv under _reply_final:<fingerprint> as "<ts>|open" or
- * "<ts>|final|<nonce>".
- */
-export async function beginReplySend(fingerprint, isFinal) {
-  const k = '_reply_final:' + fingerprint;
-  if (isFinal) {
-    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(4)))
-      .map((b) => b.toString(16).padStart(2, '0')).join('');
-    const fin = `${now()}|final|${nonce}`;
-    const r = await db.run(sql`INSERT INTO kv (k, v) VALUES (${k}, ${fin})
-      ON CONFLICT(k) DO UPDATE SET v = ${fin} WHERE kv.v LIKE '%|open'`);
-    return r.rowsAffected > 0 ? { claimed: fin } : null;
-  }
-  const open = `${now()}|open`;
-  const r = await db.run(sql`INSERT INTO kv (k, v) VALUES (${k}, ${open})
-    ON CONFLICT(k) DO UPDATE SET v = kv.v WHERE kv.v LIKE '%|open'`);
-  return r.rowsAffected > 0 ? { claimed: null } : null;
-}
-
-/** Give a token back after a failed final send. Touches only our own claim. */
-export async function reopenReply(fingerprint, claimed) {
-  if (!claimed) return;
-  const k = '_reply_final:' + fingerprint;
-  await db.run(sql`UPDATE kv SET v = ${`${now()}|open`} WHERE k = ${k} AND v = ${claimed}`);
-}
-
-/** Value is "unixTs|telegram_message_id". Taken once, on the first send. */
-export async function setReplyPlaceholder(fingerprint, messageId) {
-  const v = `${now()}|${messageId}`;
-  await db.run(sql`INSERT INTO kv (k, v) VALUES (${'_reply_ph:' + fingerprint}, ${v})
-                   ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
-}
-
-export async function takeReplyPlaceholder(fingerprint) {
-  const k = '_reply_ph:' + fingerprint;
-  const r = await db.run(sql`DELETE FROM kv WHERE k = ${k} RETURNING v`);
-  const row = (r.rows && r.rows[0]) || null;
-  if (!row || row.v == null) return null;
-  const raw = String(row.v);
-  const mid = raw.includes('|') ? raw.split('|').pop() : raw;
-  const n = Number(mid);
-  return Number.isFinite(n) ? n : null;
 }
 
 /** True the first time an update_id is seen (Telegram may re-send). */
@@ -121,6 +64,23 @@ export async function recentHistory(chatId, threadId, limit, { maxChars = null, 
   return formatRecent(rows.slice(0, limit), { maxChars, itemMaxChars });
 }
 
+/**
+ * Source conversation for /skills: the chat's conversation (topic) with the latest
+ * non-command USER message — the current topic if it is the latest, else the most
+ * recently active other one. Assistant replies are ignored when ranking so that the
+ * reply to an earlier /usage or /skills does not make a service topic "the latest".
+ * Returns {thread_id|null, topic_name|null, history[]} or null when there is no memory.
+ */
+export async function skillSource(chatId, limit, { maxChars = null, itemMaxChars = ITEM_MAX_CHARS } = {}) {
+  const r = await db.get(sql`SELECT thread_id FROM messages
+      WHERE chat_id = ${chatId} AND role = 'user' AND text NOT LIKE '/%'
+      ORDER BY ts DESC, id DESC LIMIT 1`);
+  if (!r) return null;
+  const tid = Number(r.thread_id) || 0;
+  const history = await recentHistory(chatId, tid, limit, { maxChars, itemMaxChars });
+  return { thread_id: tid || null, topic_name: await topicName(chatId, tid), history };
+}
+
 // -- topics ---------------------------------------------------------------
 export async function rememberTopic(chatId, threadId, name) {
   if (!threadId || !name) return;
@@ -152,12 +112,6 @@ export async function updateDelivery(id, { status, attempts, httpStatus = null, 
 export async function noteAttempt(id, attempts) {
   if (!id) return;
   await db.run(sql`UPDATE deliveries SET attempts = ${attempts}, updated = ${now()} WHERE id = ${id}`);
-}
-
-/** Wakes in the last hour across ALL chats (global rate limit). */
-export async function recentWakesGlobal() {
-  const r = await db.get(sql`SELECT count(*) AS n FROM deliveries WHERE created > ${now() - 3600}`);
-  return r ? Number(r.n) : 0;
 }
 
 /** Wakes in the last minute for one chat (rate limit). */
@@ -205,6 +159,105 @@ export async function claimAlbum(msg) {
   return rows.map((x) => ({ updateId: x.update_id == null ? null : Number(x.update_id), msg: JSON.parse(x.message) }));
 }
 
+// -- burst parts (v4.4.2) --------------------------------------------------
+export async function addBurstPart(burstId, msg, updateId, threadId) {
+  const r = await db.run(sql`INSERT OR IGNORE INTO burst_parts
+      (burst_id, chat_id, thread_id, message_id, update_id, message, claimed, ts_ms, ts)
+      VALUES (${burstId}, ${msg.chat.id}, ${threadId || 0}, ${msg.message_id}, ${updateId}, ${JSON.stringify(msg)}, 0,
+              ${Date.now()}, ${now()})`);
+  return r.rowsAffected > 0;
+}
+
+/** burst_id of the newest still-open burst in this chat/topic whose latest part is younger than `windowMs`. */
+export async function openBurst(chatId, threadId, windowMs) {
+  const r = await db.get(sql`SELECT burst_id FROM burst_parts WHERE chat_id = ${chatId}
+      AND thread_id = ${threadId || 0} AND claimed = 0
+      GROUP BY burst_id HAVING max(ts_ms) > ${Date.now() - windowMs}
+      ORDER BY burst_id DESC LIMIT 1`);
+  return r ? Number(r.burst_id) : null;
+}
+
+/** Age (ms) of the newest part of a burst. */
+export async function burstIdleMs(chatId, burstId) {
+  const r = await db.get(sql`SELECT max(ts_ms) AS t FROM burst_parts WHERE chat_id = ${chatId} AND burst_id = ${burstId}`);
+  return r && r.t != null ? Date.now() - Number(r.t) : Infinity;
+}
+
+function burstRows(r) {
+  const rows = (r.rows || []).slice().sort((a, b) => Number(a.message_id) - Number(b.message_id));
+  return rows.map((x) => ({ updateId: x.update_id == null ? null : Number(x.update_id), msg: JSON.parse(x.message) }));
+}
+
+/** Atomically claim every unclaimed part of the burst (in message order). */
+export async function claimBurst(chatId, burstId) {
+  const r = await db.run(sql`UPDATE burst_parts SET claimed = 1 WHERE chat_id = ${chatId}
+      AND burst_id = ${burstId} AND claimed = 0 RETURNING message_id, update_id, message`);
+  return burstRows(r);
+}
+
+/** Claim a single part (a joiner that lost the race against its burst's claim). */
+export async function claimBurstPart(chatId, messageId) {
+  const r = await db.run(sql`UPDATE burst_parts SET claimed = 1 WHERE chat_id = ${chatId}
+      AND message_id = ${messageId} AND claimed = 0 RETURNING message_id, update_id, message`);
+  return burstRows(r);
+}
+
+/** Is the burst's opening message still unclaimed (i.e. the opener has not delivered yet)? */
+export async function burstIsOpen(chatId, burstId) {
+  const r = await db.get(sql`SELECT count(*) AS n FROM burst_parts WHERE chat_id = ${chatId}
+      AND burst_id = ${burstId} AND message_id = ${burstId} AND claimed = 0`);
+  return Number(r ? r.n : 0) > 0;
+}
+
+// -- placeholders (v4.3) ---------------------------------------------------
+export async function addPlaceholder({ chatId, threadId, replyTo, messageId, stickerMessageId = null }) {
+  const t = now();
+  const stickerId = stickerMessageId || null;
+  await db.run(sql`INSERT INTO placeholders (chat_id, thread_id, reply_to, message_id, sticker_message_id, state, created, updated)
+      VALUES (${chatId}, ${threadId || 0}, ${replyTo}, ${messageId}, ${stickerId}, 'active', ${t}, ${t})
+      ON CONFLICT(chat_id, reply_to) DO UPDATE SET thread_id = excluded.thread_id,
+        message_id = excluded.message_id, sticker_message_id = excluded.sticker_message_id,
+        state = 'active', created = excluded.created, updated = excluded.updated`);
+}
+
+function phRow(r) {
+  if (!r) return null;
+  const sticker = r.sticker_message_id != null ? Number(r.sticker_message_id) : null;
+  return { message_id: Number(r.message_id), thread_id: Number(r.thread_id) || null,
+    reply_to: Number(r.reply_to), created: Number(r.created),
+    sticker_message_id: Number.isFinite(sticker) && sticker ? sticker : null };
+}
+
+/**
+ * Atomically take the ACTIVE placeholder that replies to `replyTo` in `chatId`
+ * and set it to `state` ('claimed' by tg-send, 'failed' by the bridge). Without
+ * replyTo: only if exactly one active placeholder exists in that chat/topic and it
+ * is younger than PLACEHOLDER_UNSCOPED_MAX_AGE. Returns the row or null.
+ */
+export async function takePlaceholder(chatId, replyTo, state, { threadId = 0 } = {}) {
+  const t = now();
+  if (replyTo) {
+    const r = await db.run(sql`UPDATE placeholders SET state = ${state}, updated = ${t}
+        WHERE chat_id = ${chatId} AND reply_to = ${replyTo} AND state = 'active'
+        RETURNING message_id, thread_id, reply_to, created, sticker_message_id`);
+    return phRow((r.rows || [])[0]);
+  }
+  const rows = await db.all(sql`SELECT id FROM placeholders WHERE chat_id = ${chatId}
+      AND thread_id = ${threadId || 0} AND state = 'active' AND created > ${t - PLACEHOLDER_UNSCOPED_MAX_AGE}
+      LIMIT 2`);
+  if (rows.length !== 1) return null;
+  const r = await db.run(sql`UPDATE placeholders SET state = ${state}, updated = ${t}
+      WHERE id = ${rows[0].id} AND state = 'active' RETURNING message_id, thread_id, reply_to, created, sticker_message_id`);
+  return phRow((r.rows || [])[0]);
+}
+
+/** Give a claimed placeholder back (tg-send could not send anything). */
+export async function releasePlaceholder(chatId, messageId) {
+  const r = await db.run(sql`UPDATE placeholders SET state = 'active', updated = ${now()}
+      WHERE chat_id = ${chatId} AND message_id = ${messageId} AND state = 'claimed'`);
+  return r.rowsAffected > 0;
+}
+
 // -- stops ----------------------------------------------------------------
 export async function addStop(chatId, draftId) {
   await db.run(sql`INSERT OR IGNORE INTO stops (chat_id, draft_id, ts) VALUES (${chatId}, ${draftId}, ${now()})`);
@@ -217,25 +270,23 @@ export async function isStopped(chatId, draftId) {
 
 // -- retention ------------------------------------------------------------
 /** Prune at most once an hour: memory older than history_days (max 2000 per
- *  conversation), all deliveries (incl. dead) > 30 days, seen/album/stops > 2 days. */
+ *  conversation), finished deliveries > 30 days, seen/album/burst/stops/placeholders > 2 days. */
 export async function housekeep(cfg) {
   const t = now();
   const last = await db.get(sql`SELECT v FROM kv WHERE k = '_last_prune'`);
   if (last && t - Number(last.v) < 3600) return null;
   await db.run(sql`INSERT INTO kv (k, v) VALUES ('_last_prune', ${String(t)})
                    ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
-  const days = Math.max(1, Number(cfg.history_days) || 30);
+  const days = Math.max(1, Number(cfg.history_days) || 7);
   let n = 0;
   n += (await db.run(sql`DELETE FROM messages WHERE ts < ${t - days * 86400}`)).rowsAffected;
   n += (await db.run(sql`DELETE FROM messages WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
          PARTITION BY chat_id, thread_id ORDER BY id DESC) AS rn FROM messages) WHERE rn > 2000)`)).rowsAffected;
-  // All deliveries older than 30 days go, including failed ('dead') and stuck 'pending' ones:
-  // they hold the full message text, so they must not outlive the history window.
-  await db.run(sql`DELETE FROM deliveries WHERE created < ${t - 30 * 86400}`);
+  await db.run(sql`DELETE FROM deliveries WHERE status IN ('delivered', 'redelivered', 'discarded') AND created < ${t - 30 * 86400}`);
   await db.run(sql`DELETE FROM seen WHERE ts < ${t - 2 * 86400}`);
-  await db.run(sql`DELETE FROM kv WHERE k GLOB '_reply_final:*' AND CAST(v AS INTEGER) < ${t - 2 * 86400}`);
-  await db.run(sql`DELETE FROM kv WHERE k GLOB '_reply_ph:*' AND CAST(v AS INTEGER) < ${t - 2 * 86400}`);
   await db.run(sql`DELETE FROM album_parts WHERE ts < ${t - 2 * 86400}`);
+  await db.run(sql`DELETE FROM burst_parts WHERE ts < ${t - 2 * 86400}`);
   await db.run(sql`DELETE FROM stops WHERE ts < ${t - 2 * 86400}`);
+  await db.run(sql`DELETE FROM placeholders WHERE created < ${t - 2 * 86400}`);
   return n;
 }

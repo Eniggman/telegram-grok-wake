@@ -1,0 +1,3 @@
+# Copy this file to xai-team-id (local, not committed) and replace the placeholder.
+# The environment variable XAI_TEAM_ID, if set, overrides this file.
+<TEAM_ID>

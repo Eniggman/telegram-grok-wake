@@ -1,149 +1,96 @@
-# Пошаговый гайд: Telegram → Telegram Serverless → Grok Bot
+# Пошаговый гайд: Telegram → Telegram Serverless → Grok Bot (v4.6)
 
-Ты (Grok Bot) проводишь человека по подключению его Telegram-бота к тебе. Основной путь — **Telegram Serverless** (папка `serverless/`). Не вываливай все шаги сразу: коротко скажи план, дождись согласия, веди по одному шагу.
+Ты (Grok Bot) проводишь человека по подключению его Telegram-бота к тебе с помощью полного пакета `tg-bridge` (v4.6): приём сообщений работает в **Telegram Serverless** (`serverless/`), а отправка ответов, вложений, Rich-таблиц, карточки `/usage` и погоды `/weather` — через локальные команды на боксе (`bin/tg-send` и др.).
 
-*(Другой вариант — свой сервер — в этом гайде не разбираем.)*
-
-Пометки: **«по документации»** — так на официальных страницах; **«пример / наша схема»** — не выдуманный официальный API. Источники в конце.
+Не вываливай все шаги сразу: коротко обозначь план, дождись согласия и веди по одному шагу.
 
 ---
 
 ## Что получится
 
-Человек пишет боту в Telegram. Платформа будит код в `serverless/`. Код пропускает только разрешённые личные чаты, отбрасывает повторы одного `update_id` и будит твою рутину. В чате сразу появляется заглушка «думаю…» (плюс статус «печатает…», он уже был в v4). Рутина отвечает через `npx tgcloud run endpoints/box` (`op: send`): первый ответ правит эту заглушку. Токен Telegram-бота в рутину не передаётся.
+1. Человек пишет боту в Telegram — платформа запускает `serverless/tgcloud/handlers/message.js`.
+2. Мост проверяет allowlist (только личка владельца и опциональных гостей), ставит «🗨️ Думаю...» + случайный стикер, склеивает альбомы и пересылки с комментарием и отправляет событие POST-запросом на webhook рутины с заголовком `Authorization: Bearer <ключ>`.
+3. Рутина отвечает командой `bin/tg-send` на боксе (классический текст, Rich Message с таблицами, стрим, фото или файл); стикер удаляется, а ответ сохраняется в памяти разговора в Serverless.
 
 ---
 
-## Шаг 1. Создать бота у @BotFather
+## Шаг 1. Создать отдельного бота у @BotFather
 
-> **Заведи для моста нового, отдельного бота.** Не подключай бота, на котором у тебя уже есть что-то важное (подписчики, другой код, база). На компьютере, откуда рутина отвечает, лежит CLI-токен Serverless, а с ним можно менять код и базу этого бота. Если рутину обманут через сообщение и токен утечёт, пострадает только этот бот.
+> **Заведи нового, отдельного бота.** Не подключай бота с важными подписчиками или базами: на боксе хранятся токен бота и CLI-токен Serverless.
 
-**По документации** ([введение](https://core.telegram.org/bots#botfather), [BotFather](https://core.telegram.org/bots/features), [учебник](https://core.telegram.org/bots/tutorial)):
-
-1. Открой официального [@BotFather](https://t.me/BotFather) (с галочкой).
-2. Отправь `/newbot`.
-3. Задай **имя** (его потом можно сменить) и **username** (5–32 символа, латиница, цифры, подчёркивания, оканчивается на `bot`, потом не меняется).
-4. Сохрани **токен** как пароль. Он нужен платформе Serverless и CLI, в рутину Grok Bot его класть не надо. Если утечёт — `/token` у @BotFather.
+1. Открой официального [@BotFather](https://t.me/BotFather) и отправь `/newbot`.
+2. Задай имя и username (оканчивается на `bot`).
+3. Сохрани **токен бота** (`TG_BOT_TOKEN`) как пароль — никому его не отправляй и не коммить в репозиторий.
+4. Узнай свой числовой Telegram ID (например, через [@userinfobot](https://t.me/userinfobot)) — это `TG_OWNER_ID`.
 
 ---
 
-## Шаг 2. Включить Telegram Serverless и выложить код
+## Шаг 2. Включить Telegram Serverless и задеплоить `serverless/`
 
-**По документации** ([Telegram Serverless](https://core.telegram.org/bots/serverless)):
-
-1. Нужен Node.js 18 или новее.
-2. В @BotFather открой своего бота → **Serverless** и включи функцию.
-3. Работай из папки `serverless/` этого пакета (или создай проект `npm create @tgcloud/bot` и перенеси туда `tgcloud/`).
-4. `npx tgcloud login` — попросят **CLI access token**. Это **другой** токен, не BOT_TOKEN. Он берётся так: @BotFather → бот → Serverless → **CLI Access** → Access token.
-5. `npx tgcloud push`. Webhook **ставит сама платформа**, вручную `setWebhook` вызывать не нужно. Состояние: `npx tgcloud webhook`. Если сбилось — `npx tgcloud webhook sync`.
-
-С телефона то же меню: @BotFather → бот → **Serverless**.
-
----
-
-## Шаг 3. Рутина Grok Bot и список, кому можно писать боту
-
-**По документации** ([Skills and routines](https://docs.x.ai/grok-bot/skills-routines-and-automations)):
-
-1. Попроси этого бота создать рутину с **webhook-триггером**.
-2. На компьютере открой карточку рутины и скопируй поля webhook.
-
-   Отдельной ссылки `grokbot://`, которая сразу открывает эти поля, в документации нет: ни в справке интерфейса приложения, ни на [Deep links](https://docs.x.ai/grok-bot/deep-links), ни на странице рутин. Поэтому путь словами, только как там написано.
-
-   На компьютере нажми **имя бота вверху чата** (то же сочетание: Cmd+Shift+I) — откроется панель сведений со **списком Routines**. Это путь из справки приложения и из [документации рутин](https://docs.x.ai/grok-bot/skills-routines-and-automations) (там: имя бота вверху чата → сведения, рутины на вкладке Details). Открой нужную рутину: у рутины с webhook есть блок **Webhook**.
-
-   Что скопировать и куда вставить (нажми на поле, чтобы скопировать):
-
-   - **POST to** — это URL. Его пиши в `routine_url`.
-   - **key** — секрет. Его пиши в `routine_key`. Мост отправит его как `Authorization: Bearer <этот ключ>`.
-   - **header** — тот же пропуск уже целиком, можно скопировать его, если так удобнее.
-
-   Ключ никому не отправляй и в открытый чат не вставляй.
-
-3. Инструкцию рутины возьми из `ROUTINE_PROMPT.md` (или пример в шаге 5).
-
-Запиши настройки в проект Serverless (на машине, где сделан `tgcloud login`). Подставь свои значения, никому их не отправляй:
-
-```bash
-npx tgcloud run endpoints/box '{"op":"config_set","values":{"owner_id":"YOUR_TELEGRAM_USER_ID","allowed_ids":"","routine_url":"YOUR_GROK_WEBHOOK_URL","routine_key":"YOUR_GROK_BEARER_KEY"}}'
-```
-
-Ключ мог остаться в истории оболочки. Поставь перед командой пробел (если история так настроена) или после неё удали строку (`history -d`) либо очисти историю сессии (`history -c`).
-
-
-- `owner_id` — твой числовой id в Telegram (в личке он совпадает с chat id). Простой способ узнать: напиши [@userinfobot](https://t.me/userinfobot) или другому боту, который показывает id. Это практический совет, не страница Telegram Docs.
-- `allowed_ids` — необязательные дополнительные id через запятую (гости в своей личке). Пустая строка — только владелец. Важно: у рутины есть терминал, а гостей она отличает от тебя только по инструкции (`sender_role: guest` → только текстовый ответ, см. `ROUTINE_PROMPT.md`). Это защита промптом, не кодом, поэтому надёжнее всего гостей не добавлять. Если **не задан** `owner_id`, список пуст и **не проходит никто** (так уже устроено в коде v4).
-- Лимиты (менять не обязательно): `max_wakes_per_min` — 12 пробуждений в минуту на один чат, `max_wakes_per_hour` — 60 в час на весь мост (у самой рутины потолок 200 запусков в час).
-- `routine_url` / `routine_key` — из карточки рутины. Ключ в ответах команды целиком не показывается.
-
-Проверка: `npx tgcloud run endpoints/box '{"op":"config_status"}'` — должно быть `"ready": true`. Пока рутина на паузе (**Paused**), запусков не будет.
+1. В @BotFather открой своего бота → **Serverless** → включи функцию.
+2. Там же открой **Serverless → CLI Access** и скопируй **CLI access token** (это отдельный токен `TGCLOUD_TOKEN`, не `TG_BOT_TOKEN`).
+3. На машине с Node.js 18+ выполни:
+   ```bash
+   cd serverless
+   npm ci
+   npx tgcloud login
+   npx tgcloud push
+   ```
+4. Webhook платформа поставит сама — вручную `setWebhook` вызывать не нужно.
 
 ---
 
-## Шаг 4. Webhook вручную ставить не нужно
+## Шаг 3. Создать webhook-рутину в Grok Bot
 
-Платформа сама направляет обновления в `tgcloud/handlers/message.js`. `setWebhook` на свой URL здесь не вызывай — иначе он поспорит с Serverless.
-
----
-
-## Шаг 5. Как объяснить рутине, чего ты хочешь
-
-**По документации:** у рутины есть **When to run** (webhook) и **Instruction**. В чат приходит тело JSON вместе с инструкцией. Ответ `200` от webhook значит «запуск начат», а не «ответ уже готов».
-
-Ниже — **пример, наша схема**. Поле `reply` и вызов `endpoints/box` с `op: send` не являются официальным API Grok Bot.
-
-```
-Эта рутина запускается входящим webhook от моста Telegram Serverless.
-
-В теле JSON: type "telegram_message", поле message.text — сообщение человека,
-message.chat.id — чат, reply.token и reply.expires_at — токен ответа (~30 минут),
-привязанный к этому чату и теме. Токена Telegram-бота в JSON нет, искать его не нужно.
-
-Ответь на message.text по делу, на том же языке, коротко.
-
-Человек уже видит «думаю…»; ваш send подставит вместо неё текст (если длиннее 4096 символов — первая часть правкой, остальное новыми сообщениями).
-Чтобы отправить ответ в тот же чат Telegram, на компьютере, где связан проект Serverless
-(npx tgcloud login), выполни в Shell:
-
-npx tgcloud run endpoints/box '{"op":"send","token":"<reply.token>","text":"текст ответа","final":true}'
-
-Не выдумывай другой адрес и не печатай токен. Пока не передан final:true, одним токеном
-можно отправить несколько частей; после успешного final:true этот токен больше не действует.
-Если команда упала с ошибкой, кроме unauthorized, можно один раз повторить её с тем же токеном; при unauthorized остановись.
-Если text пустой, send не вызывай.
-Не делай опасных действий (сообщения другим людям, покупка, удаление, публикация)
-без моего подтверждения в этом чате Grok Bot.
-```
-
-Пример просьбы создать рутину:
-
-> Создай рутину с триггером webhook. В теле JSON приходят message.text и reply.token. Ответь на text и отправь ответ командой `npx tgcloud run endpoints/box` с op send, token и text. Токен бота не ищи. Опасные действия — только с моим подтверждением.
+1. Создай рутину с **webhook-триггером** и вставь инструкцию из [ROUTINE_PROMPT.md](ROUTINE_PROMPT.md).
+2. Открой карточку рутины (на компьютере: имя бота вверху чата / `Cmd+Shift+I` → вкладка Details → Routines → блок **Webhook**) и скопируй:
+   * **POST to** → это `ROUTINE_URL`;
+   * **key** → это секрет рутины (`TGGROK_ROUTINE_KEY`).
 
 ---
 
-## Как проверить
+## Шаг 4. Установить Python-часть на боксе и связать с Serverless
 
-1. `config_status` показывает `ready: true`, рутина не на паузе, `npx tgcloud webhook` синхронизирован.
-2. Напиши своему боту в личку «привет».
-3. В чате Grok Bot должен появиться запуск, в Telegram — ответ.
-4. Сообщение из группы или от id не из списка должно молча игнорироваться (платформа всё равно принимает обновление, рутина не будится).
-5. Кнопка **Test** у рутины, **по документации**, делает настоящий запуск в чате бота. В Telegram она сама ничего не отправит, если в тестовом теле нет `reply.token`.
+1. Установи зависимости в `.venv`:
+   ```bash
+   bin/tg-install
+   ```
+2. Создай конфиг `~/.config/tg-bridge/env` на основе `env.example`:
+   * укажи `TG_OWNER_ID`, `ROUTINE_URL` (только `https://`), `ROUTINE_KEY_ENV=TGGROK_ROUTINE_KEY`;
+   * `TG_BOT_TOKEN`, `TGGROK_ROUTINE_KEY` и `TGCLOUD_TOKEN` лучше держать в переменных окружения / секретах бокса (не в git).
+   * При необходимости настрой `TG_STICKER_PACK` (по умолчанию `VikostVSpack`, `off` отключает).
+3. Передай настройки в Serverless и зарегистрируй меню команд (`/new`, `/skills`, `/usage`, `/weather`):
+   ```bash
+   bin/tg-cloud setup
+   bin/tg-cloud commands
+   bin/tg-health
+   ```
+   Убедись, что `bin/tg-health` показывает режим `serverless`, синхронизированный webhook и совпадающий отпечаток ключа.
 
 ---
 
-## Частые проблемы
+## Шаг 5. Опционально: карточка `/usage` и погода `/weather`
 
-- **`ready: false` / бот молчит** — не заданы `owner_id`, `routine_url` или `routine_key`, или адрес рутины начинается не с `https://` (такой мост не примет, чтобы ключ не ушёл открытым текстом); ты пишешь не из лички или с чужого id. Проверь `config_status` и свой числовой id.
-- **Рутина не стартует** — неверный URL или ключ, рутина на паузе. **По документации**, любой ответ webhook кроме `200` значит, что запуск не начался.
-- **Рутина есть, в Telegram ответа нет** — нет `reply.token`, не выполнен `npx tgcloud run endpoints/box`, токен истёк (~30 минут) или уже закрыт через `final: true`, либо CLI не залогинен в этот проект.
-- **`send` вернул ошибку** — токен с `final: true` при ошибке Telegram не сгорает: повтори ту же команду (часть сообщения при этом может продублироваться). Ответ `unauthorized` значит, что токен истёк, уже закрыт или не от этого чата.
-- **Дубликаты одного сообщения** обработчик уже отбрасывает по `update_id`. Если Telegram шлёт одно и то же снова и снова, проверь `npx tgcloud webhook` и что обработчик не падает до `markSeen`.
-- **Токен бота мог утечь** — у @BotFather команда `/token`, затем заново свяжи Serverless / CLI, если потребуется.
+* **Блок расходов Grok API в `/usage`:** получи Management-ключ в `console.x.ai` (Settings → Management Keys), положи в `XAI_MANAGEMENT_KEY`, а Team ID — в `XAI_TEAM_ID` или локальный файл `xai-team-id`. Подробности: [docs/USAGE_CARD.md](docs/USAGE_CARD.md).
+* **Виджет погоды `/weather`:** положи ключ meteoblue в `METEOBLUE_API_KEY`. Город по умолчанию — Киев (`kyiv`), можно сменить через `TG_WEATHER_CITY` или флаги `--name --lat --lon`. Подробности: [docs/WEATHER.md](docs/WEATHER.md).
+
+---
+
+## Шаг 6. Проверка и частые проблемы
+
+1. Напиши боту в личку «привет». В чате должны появиться «🗨️ Думаю...» и стикер, в Grok Bot — запуск рутины, затем ответ в Telegram (стикер исчезнет).
+2. Проверь команды `/status`, `/usage`, `/weather` и `/new`.
+3. Сообщения от чужих ID или из групп должны молча игнорироваться.
+
+Если что-то не работает:
+* **Бот молчит:** проверь `bin/tg-health` и `bin/tg-cloud status` — заданы ли `owner_id`, `routine_url` (`https://`) и `routine_key`, не на паузе ли рутина.
+* **Сообщения не дошли:** посмотри `bin/tg-redeliver` (можно переотправить с `--send` или сбросить `--drop ID`).
+* **Нужен временный откат без Serverless:** `bin/tg-mode polling` (вернуть обратно: `bin/tg-mode serverless`).
 
 ---
 
 ## Источники
 
-- Создать бота: [core.telegram.org/bots](https://core.telegram.org/bots#botfather), [BotFather](https://core.telegram.org/bots/features), [учебник](https://core.telegram.org/bots/tutorial)
-- Telegram Serverless: [core.telegram.org/bots/serverless](https://core.telegram.org/bots/serverless)
-- Рутины и webhook Grok Bot: [docs.x.ai/grok-bot/skills-routines-and-automations](https://docs.x.ai/grok-bot/skills-routines-and-automations)
+* Боты Telegram: [core.telegram.org/bots](https://core.telegram.org/bots#botfather)
+* Telegram Serverless: [core.telegram.org/bots/serverless](https://core.telegram.org/bots/serverless)
+* Рутины Grok Bot: [docs.x.ai/grok-bot/skills-routines-and-automations](https://docs.x.ai/grok-bot/skills-routines-and-automations)

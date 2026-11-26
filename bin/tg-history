@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Read stored conversation history (see tgbridge/histcli.py).
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PY="$DIR/.venv/bin/python"
+[ -x "$PY" ] || { echo "tg-bridge: dependencies are not installed; run $DIR/bin/tg-install" >&2; exit 2; }
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m tgbridge.histcli "$@"

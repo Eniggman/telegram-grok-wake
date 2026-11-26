@@ -1,0 +1,185 @@
+{
+  "timeSeries": [
+    {
+      "group": [
+        "Cached prompt text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "groupLabels": [
+        "Cached prompt text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-21T22:00:00Z",
+          "values": [
+            8000000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Prompt text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "groupLabels": [
+        "Prompt text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-21T22:00:00Z",
+          "values": [
+            700000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Prompt image tokens",
+        "API OAuth grok-4.7"
+      ],
+      "groupLabels": [
+        "Prompt image tokens",
+        "API OAuth grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-21T22:00:00Z",
+          "values": [
+            5000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Completion text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "groupLabels": [
+        "Completion text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-21T22:00:00Z",
+          "values": [
+            20000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Reasoning text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "groupLabels": [
+        "Reasoning text tokens",
+        "API OAuth grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-21T22:00:00Z",
+          "values": [
+            5000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Cached prompt text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "groupLabels": [
+        "Cached prompt text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-22T22:00:00Z",
+          "values": [
+            3490000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Prompt text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "groupLabels": [
+        "Prompt text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-22T22:00:00Z",
+          "values": [
+            580000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Completion text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "groupLabels": [
+        "Completion text tokens",
+        "Grok Chat grok-4.7"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-22T22:00:00Z",
+          "values": [
+            88000
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "Generated image",
+        "API OAuth grok-imagine-image-2.0"
+      ],
+      "groupLabels": [
+        "Generated image",
+        "API OAuth grok-imagine-image-2.0"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-22T22:00:00Z",
+          "values": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "group": [
+        "File Storage (MB-minute)",
+        "API File Storage"
+      ],
+      "groupLabels": [
+        "File Storage (MB-minute)",
+        "API File Storage"
+      ],
+      "dataPoints": [
+        {
+          "timestamp": "2026-11-22T22:00:00Z",
+          "values": [
+            100
+          ]
+        }
+      ]
+    }
+  ],
+  "limitReached": false
+}

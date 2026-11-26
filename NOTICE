@@ -1,0 +1,38 @@
+tg-bridge — NOTICE
+
+This is an independent implementation. No source files were copied from other
+projects. Since v2.0 (current: v3) it is built on these open-source libraries (installed
+from PyPI, pinned with hashes in requirements.txt, not vendored):
+
+* aiogram 3.33.0 — MIT — https://github.com/aiogram/aiogram (Telegram Bot API client)
+* aiohttp — Apache-2.0 — https://github.com/aio-libs/aiohttp (HTTP, via aiogram)
+* tenacity 9.2.1 — Apache-2.0 — https://github.com/jd/tenacity (retries)
+* supervisor 4.3.0 — BSD-derived (repoze) — https://github.com/Supervisor/supervisor
+  (process supervision, event listener protocol)
+* Pillow — MIT-CMU — optional PNG->JPEG conversion for set-photo
+
+The design was informed by reading the following open-source projects:
+
+* deluminor/telegram-routine-bridge — MIT License, Copyright 2026 Erik Kopcha
+  https://github.com/deluminor/telegram-routine-bridge
+  Ideas used: strict owner allowlist (private chat only, from.id == chat.id,
+  fail closed), secrets only from env/private file and never on the command line.
+
+* jexmarc/grokbot-telegram — MIT License, Copyright (c) 2026 grokbot-telegram contributors
+  https://github.com/jexmarc/grokbot-telegram
+  Ideas used: sendMessageDraft streaming, receipt reactions, marking Telegram
+  content as untrusted in the routine payload.
+
+Concepts only (these repositories had no license at the time of review, so no
+code, text or structure was copied, only general ideas were re-implemented):
+
+* clsasa1/grokbot-telegram-bridge — media/voice download, a tg-* CLI for replies.
+* arismarioneves/grokbot-telegram — general relay-to-routine approach.
+
+Telegram Bot API reference: https://core.telegram.org/bots/api (target: Bot API 10.5)
+
+v4: inbound intake runs on Telegram Serverless (https://core.telegram.org/bots/serverless),
+deployed and operated with Telegram's official CLI @tgcloud/cli (npm), pinned in
+serverless/package-lock.json.
+
+v4.1: outbound replies use Telegram Rich Messages (Bot API 10.1+) via aiogram 3.33 send_rich_message / send_rich_message_draft. Markdown is sent to the official API as-is; no third-party converter is vendored.

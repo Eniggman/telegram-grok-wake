@@ -1,5 +1,5 @@
 // handlers/stopped_message_generation.js — the user tapped "Stop" on a streaming
-// draft (streaming reply). Recorded so a later send can stop.
+// draft (tg-send stream). Recorded so the streaming tg-send on the box stops.
 import { loadConfig, addStop } from '../lib/store.js';
 
 export default async function (ev) {

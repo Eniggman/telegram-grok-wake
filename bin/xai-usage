@@ -1,0 +1,482 @@
+#!/usr/bin/env python3
+"""Fetch xAI API spend for the Telegram /usage card.
+
+Standalone and reusable: talks only to https://management-api.x.ai, prints one
+JSON object, and never prints the Management key.
+
+Credentials (placeholders only in this file):
+  - XAI_MANAGEMENT_KEY — required, from the environment only.
+  - XAI_TEAM_ID — from the environment, or a local (not committed) config file:
+    `xai-team-id` next to this repo, or `~/.config/tg-bridge/team-id`.
+    Put the team id in one of those places; do not hard-code it here.
+
+A normal inference API key is rejected; the script then exits 0 with
+JSON ok=false and api_note="нужен management-ключ" so the card can still
+be sent without API numbers.
+
+See docs/USAGE_CARD.md and https://docs.x.ai/developers/management-api-guide.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+BASE = "https://management-api.x.ai"
+NOTE = "нужен management-ключ"
+PARTIAL_NOTE = "данные API частично недоступны"
+TZ_NAME = "Europe/Kiev"  # name sent to the Management API
+CHART_DAYS = 10
+
+def _zone(name: str = TZ_NAME):
+    """Europe/Kiev and Europe/Kyiv are the same zone; some tzdata only has Kyiv."""
+    tried = []
+    for cand in (name, "Europe/Kyiv", "Europe/Kiev"):
+        if cand in tried:
+            continue
+        tried.append(cand)
+        try:
+            return ZoneInfo(cand)
+        except Exception:
+            continue
+    raise RuntimeError(f"no time zone data for {name}")
+
+BREAKDOWN_DAYS = 3
+BAR_WIDTH = 10
+# Placeholder only — never a real team id. Override with XAI_TEAM_ID or a local file.
+DEFAULT_TEAM_ID = "<TEAM_ID>"
+
+
+def _out(payload: dict, exit_code: int = 0) -> None:
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    key = (os.environ.get("XAI_MANAGEMENT_KEY") or "").strip()
+    if key and key in text:
+        text = json.dumps({"ok": False, "error": "internal", "api_note": NOTE},
+                          ensure_ascii=False, separators=(",", ":"))
+    sys.stdout.write(text + "\n")
+    raise SystemExit(exit_code)
+
+
+def _cents_to_usd(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("val", value.get("value"))
+    try:
+        cents = float(value)
+    except (TypeError, ValueError):
+        return None
+    # Docs: prepaid total is USD cents.
+    return cents / 100.0
+
+
+def _usd_text(amount: float | None) -> str | None:
+    if amount is None:
+        return None
+    if abs(amount) < 0.005:
+        amount = 0.0
+    return f"${amount:,.2f}"
+
+
+def format_tokens(n: float | int | None, *, total: bool = False) -> str:
+    try:
+        total_n = int(round(float(n or 0)))
+    except (TypeError, ValueError):
+        total_n = 0
+    if total_n < 0:
+        total_n = 0
+    if total_n >= 100_000:
+        m = total_n / 1_000_000
+        shown = f"{m:.0f}" if m >= 100 else f"{m:.1f}"
+        if shown.endswith(".0"):
+            shown = shown[:-2]
+        return f"{shown} млн токенов" if total else f"{shown} млн"
+    if total_n >= 1_000:
+        k = total_n / 1_000
+        shown = f"{k:.0f}" if k >= 100 else f"{k:.1f}"
+        if shown.endswith(".0"):
+            shown = shown[:-2]
+        return f"{shown} тыс. токенов" if total else f"{shown} тыс."
+    return f"{total_n} токенов" if total else f"{total_n} ток."
+
+
+def days_word(n: int) -> str:
+    """Russian plural for 'day' after a number: 1 день, 2 дня, 5 дней."""
+    n = abs(int(n))
+    if 11 <= (n % 100) <= 14:
+        return "дней"
+    r = n % 10
+    if r == 1:
+        return "день"
+    if r in (2, 3, 4):
+        return "дня"
+    return "дней"
+
+
+def _scalar(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("val", value.get("value"))
+        return _scalar(value)
+    if isinstance(value, list):
+        return _scalar(value[0] if value else None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _series_list(body: dict | None) -> list:
+    if not isinstance(body, dict):
+        return []
+    series = body.get("timeSeries", body.get("time_series"))
+    return series if isinstance(series, list) else []
+
+
+def _data_points(series: dict) -> list:
+    pts = series.get("dataPoints", series.get("data_points"))
+    return pts if isinstance(pts, list) else []
+
+
+def _point_value(dp: dict) -> float:
+    if not isinstance(dp, dict):
+        return 0.0
+    n = _scalar(dp.get("values"))
+    return n if n is not None else 0.0
+
+
+def _group_parts(series: dict) -> tuple[str, str]:
+    group = series.get("group")
+    if not isinstance(group, list):
+        group = []
+    parts = [str(x) for x in group]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    if len(parts) == 1:
+        return "", parts[0]
+    return "", ""
+
+
+def point_date(ts: str, tz_name: str = TZ_NAME) -> date | None:
+    """Convert a usage dataPoint timestamp to a calendar date in tz_name.
+
+    Timestamps are UTC instants of the requested-timezone midnight. A point
+    labelled '2026-11-21T22:00:00Z' is 2026-11-22 in Europe/Kiev. Do not
+    take the date from the first 10 characters of the string.
+    """
+    if not ts:
+        return None
+    raw = str(ts).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_zone(tz_name)).date()
+
+
+def classify_unit(unit: str) -> str:
+    u = (unit or "").lower()
+    if "cached" in u:
+        return "cache"
+    if "prompt" in u:
+        return "input"
+    if "completion" in u or "reasoning" in u:
+        return "output"
+    return "other"
+
+
+def iter_points(body: dict | None):
+    for series in _series_list(body):
+        if not isinstance(series, dict):
+            continue
+        unit, desc = _group_parts(series)
+        for dp in _data_points(series):
+            if not isinstance(dp, dict):
+                continue
+            d = point_date(dp.get("timestamp") or "")
+            yield d, unit, desc, _point_value(dp)
+
+
+def date_window(now: datetime | None = None, days: int = CHART_DAYS) -> tuple[date, list[date], str, str]:
+    tz = _zone()
+    today = (now or datetime.now(tz)).astimezone(tz).date()
+    start = today - timedelta(days=days - 1)
+    end = today + timedelta(days=1)  # exclusive
+    dates = [start + timedelta(days=i) for i in range(days)]
+    return today, dates, start.strftime("%Y-%m-%d 00:00:00"), end.strftime("%Y-%m-%d 00:00:00")
+
+
+def usage_body(start: str, end: str, value_name: str) -> dict:
+    return {
+        "analyticsRequest": {
+            "timeRange": {
+                "startTime": start,
+                "endTime": end,
+                "timezone": TZ_NAME,
+            },
+            "timeUnit": "TIME_UNIT_DAY",
+            "values": [{"name": value_name, "aggregation": "AGGREGATION_SUM"}],
+            "groupBy": ["unit_type", "description"],
+            "filters": [],
+        }
+    }
+
+
+def daily_usd(body: dict | None, days: list[date]) -> list[dict]:
+    totals = {d: 0.0 for d in days}
+    for d, _unit, _desc, val in iter_points(body):
+        if d in totals:
+            totals[d] += val
+    return [{"date": d.isoformat(), "usd": round(totals[d], 2)} for d in days]
+
+
+def breakdown(usd_body: dict | None, units_body: dict | None, days: list[date]) -> dict:
+    dayset = set(days)
+    cats = {
+        "input": {"tokens": 0.0, "usd": 0.0},
+        "output": {"tokens": 0.0, "usd": 0.0},
+        "cache": {"tokens": 0.0, "usd": 0.0},
+        "other": {"tokens": 0.0, "usd": 0.0},
+    }
+    limit_reached = bool(
+        (isinstance(usd_body, dict) and (usd_body.get("limitReached") or usd_body.get("limit_reached")))
+        or (isinstance(units_body, dict) and (units_body.get("limitReached") or units_body.get("limit_reached")))
+    )
+    include_usd = usd_body is not None
+    include_tokens = units_body is not None
+    if include_usd:
+        for d, unit, _desc, val in iter_points(usd_body):
+            if d in dayset:
+                cats[classify_unit(unit)]["usd"] += val
+    if include_tokens:
+        for d, unit, _desc, val in iter_points(units_body):
+            if d in dayset and classify_unit(unit) != "other":
+                cats[classify_unit(unit)]["tokens"] += val
+
+    def pack(name: str) -> dict:
+        row = cats[name]
+        out: dict = {}
+        if include_tokens:
+            out["tokens"] = int(round(row["tokens"]))
+            out["tokens_text"] = format_tokens(row["tokens"])
+        if include_usd:
+            out["usd"] = round(row["usd"], 2)
+            out["usd_text"] = _usd_text(row["usd"])
+        return out
+
+    n_days = len(days)
+    word = days_word(n_days)
+    parts = []
+    total_tokens = total_usd = None
+    if include_tokens:
+        total_tokens = cats["input"]["tokens"] + cats["output"]["tokens"] + cats["cache"]["tokens"]
+        parts.append(format_tokens(total_tokens, total=True))
+    if include_usd:
+        total_usd = cats["input"]["usd"] + cats["output"]["usd"] + cats["cache"]["usd"] + cats["other"]["usd"]
+        parts.append(_usd_text(total_usd))
+    total_text = f"Итого за {n_days} {word}: " + " · ".join(parts) if parts else None
+    out = {
+        "days": n_days,
+        "input": pack("input"),
+        "output": pack("output"),
+        "cache": pack("cache"),
+        "total_text": total_text,
+        "limit_reached": limit_reached,
+    }
+    if include_usd:
+        out["other_usd"] = round(cats["other"]["usd"], 2)
+        out["other_usd_text"] = _usd_text(cats["other"]["usd"])
+        out["total_usd"] = round(total_usd, 2)
+        out["total_usd_text"] = _usd_text(total_usd)
+    if include_tokens:
+        out["total_tokens"] = int(round(total_tokens))
+        out["total_tokens_text"] = format_tokens(total_tokens, total=True)
+    return out
+
+
+def parse_usage(body: dict | None, *, tokens_only: bool = False) -> dict:
+    """Sum a usage response (all days present in the body)."""
+    total = 0.0
+    by_model: dict[str, float] = {}
+    limit_reached = bool(isinstance(body, dict) and (
+        body.get("limitReached") or body.get("limit_reached")))
+    for _d, unit, desc, val in iter_points(body):
+        if tokens_only and classify_unit(unit) == "other":
+            continue
+        total += val
+        if desc:
+            by_model[desc] = by_model.get(desc, 0.0) + val
+    return {"total": total, "by_model": by_model, "limit_reached": limit_reached}
+
+
+def _is_placeholder(value: str) -> bool:
+    v = (value or "").strip()
+    return (not v) or v in ("<TEAM_ID>", "<XAI_TEAM_ID>", "YOUR_TEAM_ID")
+
+
+def team_id_candidates() -> list[Path]:
+    root = Path(__file__).resolve().parent.parent
+    return [root / "xai-team-id", Path.home() / ".config/tg-bridge/team-id"]
+
+
+def team_id(files: list[Path] | tuple | None = None) -> str:
+    env = (os.environ.get("XAI_TEAM_ID") or "").strip()
+    if not _is_placeholder(env):
+        return env
+    for cand in (files if files is not None else team_id_candidates()):
+        try:
+            text = Path(cand).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and not _is_placeholder(line):
+                return line
+    return ""
+
+
+def _request(key: str, path: str, body: dict | None = None) -> tuple[int, dict | None, str]:
+    data = None
+    method = "GET"
+    headers = {
+        "Authorization": "Bearer " + key,
+        "Accept": "application/json",
+    }
+    if body is not None:
+        method = "POST"
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace") if e.fp else ""
+        status = e.code
+    except urllib.error.URLError:
+        # Do not include request headers (they carry the key).
+        return 0, None, "network error"
+    parsed = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+    err = ""
+    if status and status >= 400:
+        err = "unauthorized" if status in (401, 403) else f"http {status}"
+    return status, parsed, err
+
+
+def build_payload(usd_body, units_body, balance_usd, start: str, end: str,
+                  chart_dates: list[date]) -> dict:
+    usd_ok = usd_body is not None
+    units_ok = units_body is not None
+    days = daily_usd(usd_body, chart_dates) if usd_ok else []
+    br = breakdown(usd_body, units_body, chart_dates[-BREAKDOWN_DAYS:]) if (usd_ok or units_ok) else None
+    spend_usd = round(sum(d["usd"] for d in days), 2) if usd_ok else None
+    limit_reached = bool(br and br.get("limit_reached"))
+    if usd_ok != units_ok:
+        note = PARTIAL_NOTE
+    elif limit_reached:
+        note = "данные неполные"
+    else:
+        note = None
+    payload = {
+        "ok": True,
+        "period_days": CHART_DAYS,
+        "breakdown_days": BREAKDOWN_DAYS,
+        "period_start": start,
+        "period_end": end,
+        "timezone": TZ_NAME,
+        "api_days": days,
+        "api_breakdown": br,
+        "period_spend_usd": spend_usd,
+        "period_spend_text": _usd_text(spend_usd),
+        "balance_usd": None if balance_usd is None else round(0.0 if abs(balance_usd) < 0.005 else balance_usd, 2),
+        "balance_text": _usd_text(balance_usd),
+        "api_balance_text": _usd_text(balance_usd),
+        "currency": "USD",
+        "limit_reached": limit_reached,
+        "partial": usd_ok != units_ok,
+    }
+    if note:
+        payload["api_note"] = note
+    return payload
+
+
+def main(now: datetime | None = None) -> None:
+    key = os.environ.get("XAI_MANAGEMENT_KEY") or ""
+    if not key.strip():
+        _out({
+            "ok": False,
+            "error": "needs_management_key",
+            "api_note": NOTE,
+            "hint": "XAI_MANAGEMENT_KEY is not set. Create a Management API key in xAI Console → Settings → Management Keys.",
+        })
+    team = team_id()
+    if not team:
+        _out({
+            "ok": False,
+            "error": "needs_team_id",
+            "api_note": NOTE,
+            "hint": "Set XAI_TEAM_ID or write the team id to the local file xai-team-id (not committed).",
+        })
+
+    _today, chart_dates, start, end = date_window(now)
+    usage_path = f"/v1/billing/teams/{team}/usage"
+    bal_status, bal_body, bal_err = _request(key, f"/v1/billing/teams/{team}/prepaid/balance")
+    usd_status, usd_body, usd_err = _request(key, usage_path, usage_body(start, end, "usd"))
+    units_status, units_body, units_err = _request(key, usage_path, usage_body(start, end, "units"))
+
+    if any(s in (401, 403) for s in (bal_status, usd_status, units_status)):
+        _out({
+            "ok": False,
+            "error": "needs_management_key",
+            "api_note": NOTE,
+            "hint": "Management API rejected the key. Use a Management API key from Console → Settings → Management Keys, not an inference API key.",
+        })
+
+    if bal_status == 0 and usd_status == 0 and units_status == 0:
+        _out({"ok": False, "error": "network", "api_note": NOTE, "hint": "Could not reach management-api.x.ai."})
+
+    balance_usd = None
+    if isinstance(bal_body, dict):
+        raw_total = _cents_to_usd(bal_body.get("total"))
+        # Docs: purchases are negative, spend positive, so remaining credit = -total.
+        balance_usd = -raw_total if raw_total is not None else None
+
+    usd_ok = usd_status == 200 and isinstance(usd_body, dict)
+    units_ok = units_status == 200 and isinstance(units_body, dict)
+    if not usd_ok and not units_ok and balance_usd is None:
+        hint = usd_err or units_err or bal_err or "no spend or balance in the response"
+        _out({"ok": False, "error": "unavailable", "api_note": NOTE, "hint": hint})
+
+    # Pass None for a failed half so the payload omits it (never a fake $0 chart).
+    payload = build_payload(
+        usd_body if usd_ok else None,
+        units_body if units_ok else None,
+        balance_usd, start, end, chart_dates,
+    )
+    _out(payload)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        # Never dump the exception if it could include the request.
+        _out({"ok": False, "error": "internal", "api_note": NOTE}, exit_code=0)
