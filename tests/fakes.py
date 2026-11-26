@@ -12,7 +12,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-TOKEN = "123456789:AAFakeTokenForTestsOnly_abcdefghijk"
+TOKEN = "00000:TEST_FAKE_TOKEN_NOT_REAL_000000000000"
 OWNER = 4242
 GUEST = 7777
 STRANGER = 9999
